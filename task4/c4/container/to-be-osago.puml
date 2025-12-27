@@ -1,0 +1,76 @@
+@startuml
+
+!theme carbon-gray
+!include <C4/C4_Container>
+!include ../../../doc/common/theme.iuml
+
+' так сделано в изначальной схеме
+SHOW_PERSON_OUTLINE()
+
+title Диаграмма контейнеров C4 (ОСАГО)
+header InsureTech
+
+Person(client, "Клиент", "Клиент")
+
+System_Ext(partners, "Системы партнёров", "Системы партнёров, интегрирующие страховые услуги в свои продукты.")
+System_Ext(payment_service, "Платёжный сервис", "Внешний платёжный сервис, через который осуществляется оплата страховок. Деньги уходят на счета страховых компаний.")
+System_Ext(insurance_systems, "Системы страховых компаний", "Предоставляют API для получения актуальных тарифов, андерайтинга и оформления страховых продуктов")
+
+System_Boundary(insuretech_prod, "InsureTech Prod [Kubernetes Cluster]") {
+    Container(web_app, "InsureTech Web", "JavaScript, React", "Веб-приложение InsureTech")
+    
+    Container(core_app, "core-app", "Kotlin, SpringBoot", "Монолитное приложение:\n• отображает данные о доступных страховых продуктах\n• оформляет новые страховки\n• отображает информацию о купленных страховках.\n(Реализует Transactional Outbox)\n[Rate Limiting]")
+    ContainerDb(core_db, "core-db", "PostgreSQL", "БД используется для хранения тарифов, заявок и таблицы Outbox.")
+    
+    Container(client_info, "client-info", "Kotlin, SpringBoot", "Сервис для учёта клиентских данных")
+    Container(aggregator, "ins-product-aggregator", "Kotlin, SpringBoot", "Сервис для интеграции со страховыми компаниями. Получает данные и публикует события об изменениях.")
+    
+    Container(osago_aggregator, "osago-aggregator", "Kotlin, SpringBoot", "Сервис для подбора ОСАГО.\nОпрашивает страховые компании и передаёт результаты.\n[Retry, Circuit Breaker, Timeout]")
+    ContainerDb(osago_db, "osago-aggregator-db", "Redis / PostgreSQL", "Хранение промежуточных состояний поиска ОСАГО.")
+
+    Container(settlement, "ins-comp-settlement", "Kotlin, SpringBoot", "Сервис для осуществления взаиморасчётов со страховыми компаниями.")
+    ContainerDb(settlement_db, "ins-comp-settlement-db", "PostgreSQL", "БД используется для хранения данных об оформленных страховках.")
+
+    ContainerDb(client_info_db, "client-info-db", "PostgreSQL", "БД используется для хранения данных клиентов.")
+    
+    ContainerQueue(message_broker, "Message Broker", "Kafka", "Шина событий для асинхронного взаимодействия между сервисами.")
+}
+
+Rel_D(client, web_app, "", "")
+Rel_L(web_app, payment_service, "Проведение оплаты за страховки (redirect)", "HTTP")
+
+Rel_D(web_app, core_app, "1. Получение тарифов\n2. Создание заявок на страховки", "REST")
+Rel_D(web_app, core_app, "Подписка на результаты ОСАГО", "SSE")
+Rel_L(core_app, payment_service, "Проведение оплаты за страховки", "HTTP")
+
+Rel_R(partners, core_app, "Оформление страховок", "REST")
+
+Rel_R(core_app, core_db, "Работа с данными", "TCP")
+
+Rel_R(web_app, client_info, "Получение/сохранение информации о клиентах", "REST")
+Rel_U(core_app, client_info, "Получение/сохранение информации о клиентах", "REST")
+
+Rel_R(aggregator, message_broker, "События: ProductUpdated", "Kafka Protocol")
+Rel_D(core_app, message_broker, "Подписка на ProductUpdated", "Kafka Protocol")
+Rel_U(settlement, message_broker, "Подписка на ProductUpdated", "Kafka Protocol")
+
+Rel_D(core_app, message_broker, "События: PolicyIssued (Outbox)", "Kafka Protocol")
+Rel_U(settlement, message_broker, "Подписка на PolicyIssued", "Kafka Protocol")
+
+Rel_D(core_app, osago_aggregator, "Запуск подбора ОСАГО", "REST")
+Rel_L(osago_aggregator, osago_db, "Работа с данными", "TCP")
+Rel_D(osago_aggregator, message_broker, "События: OsagoOfferReceived", "Kafka Protocol")
+Rel_D(core_app, message_broker, "Подписка на OsagoOfferReceived", "Kafka Protocol")
+
+Rel_R(client_info, client_info_db, "Работа с данными", "TCP")
+Rel_R(settlement, settlement_db, "Работа с данными", "TCP")
+
+Rel_D(aggregator, insurance_systems, "Получение информации по продуктам и тарифам", "REST / SOAP / GraphQL")
+Rel_D(osago_aggregator, insurance_systems, "Заявки на ОСАГО и получение предложений", "REST [Retry, CB, Timeout]")
+Rel_L(settlement, insurance_systems, "Передача данных для взаиморасчётов", "REST / SOAP / GraphQL")
+
+Lay_D(payment_service, partners)
+Lay_D(partners, insurance_systems)
+Lay_D(osago_aggregator, aggregator)
+
+@enduml

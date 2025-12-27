@@ -1,0 +1,62 @@
+@startuml
+
+!theme carbon-gray
+!include <C4/C4_Container>
+!include ../../../doc/common/c4-custom-rel.iuml
+!include ../../../doc/common/theme.iuml
+
+' так сделано в изначальной схеме
+SHOW_PERSON_OUTLINE()
+
+title Диаграмма контейнеров C4 (как-есть)
+header InsureTech
+
+Person(client, "Клиент", "Клиент")
+
+System_Ext(partners, "Системы партнёров", "Системы партнёров, интегрирующие страховые услуги в свои продукты.")
+System_Ext(payment_service, "Платёжный сервис", "Внешний платёжный сервис, через который осуществляется оплата страховок. Деньги уходят на счета страховых компаний.")
+System_Ext(insurance_systems, "Системы страховых компаний", "Предоставляют API для получения актуальных тарифов, андерайтинга и оформления страховых продуктов")
+
+System_Boundary(insuretech_prod, "InsureTech Prod [Виртуальная машина]") {
+    Container(web_app, "InsureTech Web", "JavaScript, React", "Веб-приложение InsureTech")
+    
+    Container(core_app, "core-app", "Kotlin, SpringBoot", "Монолитное приложение:\n• отображает данные о доступных страховых продуктах\n• оформляет новые страховки\n• отображает информацию о купленных страховках.")
+    ContainerDb(core_db, "core-db", "PostgreSQL", "БД используется для хранения тарифов страховых компаний, а также заявок клиентов на страховые продукты.")
+    
+    Container(client_info, "client-info", "Kotlin, SpringBoot", "Сервис для учёта клиентских данных")
+    Container(aggregator, "ins-product-aggregator", "Kotlin, SpringBoot", "Сервис для интеграции со страховыми компаниями с целью получения информации по страховым продуктам. Предоставляет единый API для core-app.")
+    Container(settlement, "ins-comp-settlement", "Kotlin, SpringBoot", "Сервис для осуществления взаиморасчётов со страховыми компаниями.")
+    ContainerDb(settlement_db, "ins-comp-settlement-db", "PostgreSQL", "БД используется для хранения данных об оформленных страховках и условиях взаиморасчётов с клиентами")
+
+    ContainerDb(client_info_db, "client-info-db", "PostgreSQL", "БД используется для хранения данных клиентов: ФИО, телефон, паспорт и др. Информация необходима для оформления страховок.")
+    
+    
+}
+
+Rel_D(client, web_app, "", "")
+Rel_L(web_app, payment_service, "Проведение оплаты за страховки (redirect)", "HTTP")
+
+Rel_D(web_app, core_app, "1. Получения тарифов\n2. Создание заявок на страховки", "REST")
+Rel_L(core_app, payment_service, "Проведение оплаты за страховки", "HTTP")
+
+Rel_R(partners, core_app, "Оформление страховок", "REST")
+
+Rel_D(core_app, core_db, "Работа с данными", "TCP")
+
+Rel_R(web_app, client_info, "Получение/сохранение информации о клиентах", "REST")
+Rel_U(core_app, client_info, "Получение/сохранение информации о клиентах", "REST")
+
+
+Rel_R(core_app, aggregator, "Получение информации по продуктам и тарифам", "REST")
+Rel_U(settlement, aggregator, "Получение информации по продуктам и тарифам", "REST")
+Rel_L(settlement, core_app, "Получение информации об оформленных страховках", "REST")
+
+Rel_R(client_info, client_info_db, "Работа с данными", "TCP")
+Rel_D(settlement, settlement_db, "Работа с данными", "TCP")
+
+Rel_R(aggregator, insurance_systems, "Получение информации по продуктам и тарифам", "REST / SOAP / GraphQL")
+Rel_R(settlement, insurance_systems, "Передача данных для взаиморасчётов", "REST / SOAP / GraphQL")
+
+Lay_D(payment_service, partners)
+
+@enduml
