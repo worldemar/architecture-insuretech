@@ -1,0 +1,57 @@
+@startuml
+!theme carbon-gray
+!include <C4/C4_Deployment>
+!include ../../../doc/common/c4-custom-rel.iuml
+!include ../../../doc/common/theme.iuml
+
+title Карта одного регионального ДЦ (как-будет)
+header InsureTech
+
+Person_Ext(user, "Клиенты", "Браузер / Мобильное приложение")
+
+System_Ext(partners, "Системы партнёров", "Системы партнёров, интегрирующие страховые услуги в свои продукты.")
+System_Ext(payment_service, "Платёжный сервис", "Внешний платёжный сервис, через который осуществляется оплата страховок. Деньги уходят на счета страховых компаний.")
+System_Ext(insurance_systems, "Системы страховых компаний", "Предоставляют API для получения актуальных тарифов, андерайтинга и оформления страховых продуктов")
+
+Deployment_Node(cdn_node, "CDN") {
+    Container(cdn, "CDN Edge", "Cache", "Кэширование статики (JS, CSS, Images)")
+}
+Deployment_Node(dns, "Глобальная\nбалансировка", "Geo-DNS / GSLB") {
+    Container(gslb, "Global Balancer", "DNS", "Маршрутизация по Geo-IP и Health Checks")
+}
+Deployment_Node(s3_node, "Объектное\nхранилище", "S3") {
+    ContainerDb(cdn_assets, "Ресурсы CDN", "S3 API", "Источник данных для CDN")
+}
+
+Deployment_Node(reg_center, "Регион") {
+    Deployment_Node(k8s_center, "Kubernetes Cluster", "") {
+        Container(app_center, "Core & Client Services", "K8s Pods", "Обработка трафика")
+        Container(ing_center, "Ingress Controller", "Nginx", "Health Checks & Balancing")
+    }
+    Deployment_Node(db_center_node, "PostgreSQL Replica") {
+        ContainerDb(db_async_center, "Read Replica", "PostgreSQL")
+    }
+}
+
+Deployment_Node(reg_west, "Регион\nЗапад (Москва)", "") {
+    Deployment_Node(db_west_node, "PostgreSQL\nHA Cluster", "Patroni") {
+        ContainerDb(db_master, "Primary DB", "PostgreSQL")
+    }
+}
+
+Rel(user, cdn, "Загрузка\nстатики")
+Rel(user, gslb, "Запрос к API")
+Rel(gslb, ing_center, "DNS -> IP", "Health Check")
+Rel(ing_center, app_center, "L7 Balancing", "Health Check")
+
+Rel(app_center, db_async_center, "Чтение", "TCP/IP")
+
+Rel_L(app_center, db_master, "Запись", "TCP/IP, VPN")
+Rel_R(db_master, db_async_center, "Репликация", "Async", "RPO < 15 min")
+
+Rel(cdn, cdn_assets, "Запрос контента")
+
+Rel_R(app_center, insurance_systems, "", "REST/SOAP")
+Rel(partners, gslb, "Оформление страховок", "REST/SOAP")
+Rel_D(app_center, payment_service, "Проведение оплаты за страховки", "Redirect + HTTP")
+@enduml

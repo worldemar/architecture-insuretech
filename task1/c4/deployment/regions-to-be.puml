@@ -1,0 +1,98 @@
+@startuml
+!theme carbon-gray
+!include <C4/C4_Deployment>
+!include ../../../doc/common/c4-custom-rel.iuml
+!include ../../../doc/common/theme.iuml
+
+title Карта региональных ДЦ (как-будет)
+header InsureTech
+
+Person_Ext(user, "Клиенты (РФ)", "Браузер / Мобильное приложение")
+
+Deployment_Node(cdn_node, "CDN") {
+    Container(cdn, "CDN Edge", "Cache", "Кэширование статики (JS, CSS, Images)")
+}
+Deployment_Node(dns, "Глобальная\nбалансировка", "Geo-DNS / GSLB") {
+    Container(gslb, "Global Balancer", "DNS", "Маршрутизация по Geo-IP и Health Checks")
+}
+Deployment_Node(s3_node, "Объектное\nхранилище", "S3 (Geo-Distributed)") {
+    ContainerDb(backups, "Backups & WAL", "S3 API", "Хранение бэкапов для RPO < 15 min")
+    ContainerDb(cdn_assets, "Ресурсы CDN", "S3 API", "Источник данных для CDN")
+    Lay_D(cdn_assets, backups)
+}
+
+Deployment_Node(reg_west, "Регион\nЗапад\n(Москва)", "Data Center A (Tier III)") {
+    Deployment_Node(k8s_west, "Kubernetes Cluster", "K8s") {
+        Container(app_west, "Core & Client Services", "Pods", "Обработка RW трафика")
+        Container(ing_west, "Ingress Controller", "Nginx", "Health Checks & Balancing")
+    }
+    Deployment_Node(db_west_node, "PostgreSQL\nHA Cluster", "Patroni") {
+        ContainerDb(db_master, "Primary DB", "PostgreSQL", "Чтение/Запись")
+        ContainerDb(db_sync, "Sync Replica", "PostgreSQL", "Горячий резерв (RPO=0)")
+    }
+}
+
+Deployment_Node(reg_center, "Регион\nСибирь\n(Новосибирск)", "Data Center B (Tier III)") {
+    Deployment_Node(k8s_center, "Kubernetes Cluster", "K8s") {
+        Container(app_center, "Core & Client Services", "Pods", "Обработка трафика (Writes -> West)")
+        Container(ing_center, "Ingress Controller", "Nginx", "Health Checks & Balancing")
+    }
+    Deployment_Node(db_center_node, "PostgreSQL\nReplica", "Async") {
+        ContainerDb(db_async_center, "Read Replica", "PostgreSQL", "Локальное чтение (RO)")
+    }
+}
+
+Deployment_Node(reg_east, "Регион\nВосток\n(Владивосток)", "Data Center C (Tier III)") {
+    Deployment_Node(k8s_east, "Kubernetes Cluster", "K8s") {
+        Container(app_east, "Core & Client Services", "Pods", "Обработка трафика (Writes -> West)")
+        Container(ing_east, "Ingress Controller", "Nginx", "Health Checks & Balancing")
+    }
+    Deployment_Node(db_east_node, "PostgreSQL\nReplica", "Async") {
+        ContainerDb(db_async_east, "Read Replica", "PostgreSQL", "Локальное чтение (RO)")
+    }
+}
+
+' Внешние системы
+System_Ext(partners, "Системы партнёров")
+System_Ext(insurance, "Системы страховых компаний")
+System_Ext(payment, "Платёжный сервис")
+
+' Связи трафика
+Rel(user, cdn, "Загрузка статики")
+Rel(user, gslb, "Запрос к API")
+Rel(partners, gslb, "Оформление страховок", "REST")
+
+ARel(gslb, ing_west, "DNS -> IP (West)", "Health Check", $arrow="---->")
+ARel(gslb, ing_center, "DNS -> IP (Center)", "Health Check", $arrow="------->")
+ARel(gslb, ing_east, "DNS -> IP (East)", "Health Check", $arrow="-->")
+
+Rel(ing_west, app_west, "L7 Balancing", "Health Check")
+Rel(ing_center, app_center, "L7 Balancing", "Health Check")
+Rel(ing_east, app_east, "L7 Balancing", "Health Check")
+
+' Связи с БД (Локальные)
+Rel(app_west, db_master, "Чтение/Запись", "TCP/IP")
+Rel(app_center, db_async_center, "Чтение", "TCP/IP")
+Rel(app_east, db_async_east, "Чтение", "TCP/IP")
+
+' Кросс-региональные записи
+Rel_R(app_center, db_master, "Запись", "TCP/IP, VPN")
+Rel_L(app_east, db_master, "Запись", "TCP/IP, VPN")
+
+' Репликация
+Rel(db_master, db_sync, "Репликация", "Sync", "RPO = 0")
+Rel(db_master, db_async_center, "Репликация", "Async", "RPO < 15 min")
+Rel(db_master, db_async_east, "Репликация", "Async", "RPO < 15 min")
+
+' Бэкапы
+Rel_U(db_master, backups, "Потоковая передача WAL", "S3 API")
+
+Rel(cdn, cdn_assets, "Запрос контента")
+
+' Внешние интеграции (через групповой интерфейс)
+Interface "ВСЕ Core & Client Services" as all_services
+Rel_R(all_services, insurance, "REST/SOAP")
+Rel_L(all_services, payment, "Redirect / API")
+Lay_D(db_sync, all_services)
+
+@enduml
