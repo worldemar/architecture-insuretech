@@ -1,0 +1,5 @@
+# irrelevant PlantUML files
+*.cmapx
+
+#irrelevant python files
+*.pyc
